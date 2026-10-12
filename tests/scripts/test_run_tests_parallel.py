@@ -627,6 +627,16 @@ def test_files_from_dash_reads_the_list_from_stdin(tmp_path: Path) -> None:
     assert "✓2" in proc.stdout or "2 passed" in proc.stdout, proc.stdout
 
 
+def test_explicit_scratch_parent_is_honored(tmp_path: Path, monkeypatch) -> None:
+    from scripts import run_tests_parallel as runner
+
+    parent = tmp_path / "chosen-scratch"
+    monkeypatch.setenv("PYTEST_DEBUG_TEMPROOT", str(parent))
+    root = Path(runner._runner_scratch_root())
+    assert root.parent == parent
+    assert root.is_dir()
+
+
 def test_scratch_root_is_per_user(tmp_path: Path, monkeypatch) -> None:
     """Two users on one host must never share the runner's scratch root.
 
@@ -640,6 +650,7 @@ def test_scratch_root_is_per_user(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.syspath_prepend(str(scripts_dir))
     runner = importlib.import_module("run_tests_parallel")
 
+    monkeypatch.delenv("PYTEST_DEBUG_TEMPROOT", raising=False)
     # Exercise the non-/var/tmp arm so the probe never mints roots in the real shared dir.
     # (Narrow: on 3.14 ``Path.is_dir()`` itself goes through ``os.path.isdir``.)
     monkeypatch.setattr(runner.tempfile, "gettempdir", lambda: str(tmp_path))

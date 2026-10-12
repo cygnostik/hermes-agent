@@ -34,6 +34,7 @@ Usage:
     pytest failure. Tokens after ``--`` are never validated.
 
 Environment:
+    PYTEST_DEBUG_TEMPROOT Explicit scratch parent, inherited by nested test runners
     HERMES_TEST_WORKERS  Override worker count (default: os.cpu_count())
     HERMES_TEST_PATHS    Override discovery roots (colon-sep; on Windows
                          ';' also works and drive letters are handled;
@@ -101,7 +102,9 @@ def _runner_scratch_root() -> str:
     back that does not need root. Keying by uid means no run is blocked by another's leftovers.
     """
     name = "hermes-pytest" + (f"-{os.getuid()}" if hasattr(os, "getuid") else "")
-    if os.name == "nt" or not os.path.isdir("/var/tmp"):  # no-tmp: ok — probing the disk-backed FHS root
+    if explicit := os.environ.get("PYTEST_DEBUG_TEMPROOT"):
+        root = os.path.join(os.path.abspath(os.path.expanduser(explicit)), name)
+    elif os.name == "nt" or not os.path.isdir("/var/tmp"):  # no-tmp: ok — probing the disk-backed FHS root
         root = os.path.join(tempfile.gettempdir(), name)
     else:
         root = f"/var/tmp/{name}"  # no-tmp: ok — /var/tmp is disk-backed by FHS, never tmpfs
@@ -1150,8 +1153,7 @@ def _print_failure_report(
             print(f"  {_format_file(file, repo_root)}")
 
 
-def main() -> int:
-    _make_stdio_glyph_safe()
+def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1162,6 +1164,11 @@ def main() -> int:
         type=int,
         default=int(os.environ.get("HERMES_TEST_WORKERS") or (os.cpu_count() or 4)),
         help="Parallel worker count (default: $HERMES_TEST_WORKERS or cpu_count)",
+    )
+    parser.add_argument(
+        "--scratch-root",
+        metavar="PATH",
+        help="Explicit short, disk-backed scratch parent; preserves the platform default when omitted",
     )
     parser.add_argument(
         "--paths",
@@ -1267,6 +1274,17 @@ def main() -> int:
             "separator is passed through to each per-file pytest invocation."
         ),
     )
+    return parser
+
+
+def _configure_scratch_root(path: str | None) -> None:
+    if path:
+        os.environ["PYTEST_DEBUG_TEMPROOT"] = os.path.abspath(os.path.expanduser(path))
+
+
+def main() -> int:
+    _make_stdio_glyph_safe()
+    parser = _argument_parser()
     # Split argv into "our flags + positional paths" vs "pytest passthrough".
     #
     # Two ways to pass args through to the per-file pytest invocation:
@@ -1286,7 +1304,7 @@ def main() -> int:
     OUR_FLAGS = {
         "-h", "--help", "-j", "--jobs", "--paths", "--include-integration",
         "--file-timeout", "--file-retries", "--slice", "--generate-slices", "--files",
-        "--files-from", "--fail-on-skip",
+        "--files-from", "--fail-on-skip", "--scratch-root",
     }
     # pytest short flags that consume the NEXT token as their value.
     PYTEST_VALUE_FLAGS = {"-k", "-m", "-p", "-o", "-c", "-r", "-W"}
@@ -1335,6 +1353,7 @@ def main() -> int:
         i += 1
 
     args = parser.parse_args(our_args)
+    _configure_scratch_root(args.scratch_root)
 
     # Bare tokens are validated against pytest's option set so a typo fails
     # here with usage instead of once per discovered file. Anything after a
