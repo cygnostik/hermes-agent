@@ -15,6 +15,7 @@ answer is identical on every connection topology.
 import pytest
 
 from tui_gateway import server
+from hermes_cli import session_toolsets
 from toolsets import TOOLSETS
 
 GUI_TOOLS = {
@@ -59,10 +60,10 @@ class TestDesktopUiToolset:
 class TestSurfaceResolution:
     def test_desktop_session_gets_them_with_no_desktop_env(self, no_desktop_env):
         """THE regression: a desktop client on a remote/cloud backend."""
-        assert "desktop_ui" in server._gui_surface_toolsets("desktop")
+        assert "desktop_ui" in session_toolsets._gui_surface_toolsets("desktop")
 
     def test_tui_session_does_not(self, no_desktop_env):
-        assert "desktop_ui" not in server._gui_surface_toolsets("tui")
+        assert "desktop_ui" not in session_toolsets._gui_surface_toolsets("tui")
 
     def test_desktop_env_alone_does_not_grant_them(self, no_desktop_env):
         """A desktop-spawned backend serving a TUI session stays clean.
@@ -71,11 +72,11 @@ class TestSurfaceResolution:
         backend; env-keyed gating handed it GUI tools it cannot answer.
         """
         no_desktop_env.setenv("HERMES_DESKTOP", "1")
-        assert "desktop_ui" not in server._gui_surface_toolsets("tui")
+        assert "desktop_ui" not in session_toolsets._gui_surface_toolsets("tui")
 
     def test_project_tools_ride_on_every_gui_surface(self, no_desktop_env):
         for platform in ("desktop", "tui"):
-            assert "project" in server._gui_surface_toolsets(platform)
+            assert "project" in session_toolsets._gui_surface_toolsets(platform)
 
 
 class TestResolverPlumbing:

@@ -1,16 +1,19 @@
 """Prompt-size diagnostic: ``hermes prompt-size``.
 
-Builds a real inspection agent (so the numbers match what ships on the wire) but never makes a
-network call: dummy credentials force ``AIAgent.__init__`` down the direct-construction path, then
-``build_system_prompt_parts`` / ``agent.tools`` are inspected offline.
+Builds an inspection agent from local prompt inputs and tool schemas, without provider
+startup or live model metadata. External memory/context providers and undiscovered MCP
+schemas are not included; tool-search sizing uses the configured/cached context hint.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 _SKILLS_BLOCK_RE = re.compile(r"<available_skills>.*?</available_skills>", re.DOTALL)
 
@@ -46,10 +49,7 @@ def _tool_name(tool: Any) -> str:
 
 
 def _build_inspection_agent(platform: str) -> Any:
-    """Offline AIAgent for prompt inspection: dummy ``api_key`` + ``base_url`` force the
-    direct-construction path (no provider auto-detection, no network); toolsets resolve the way
-    the gateway does so the breakdown matches a real session.
-    """
+    """Inspect local inputs with the session resolver, without live runtime startup."""
     from run_agent import AIAgent
     from hermes_cli.config import load_config
     from hermes_cli.tools_config import _get_platform_tools
@@ -58,11 +58,17 @@ def _build_inspection_agent(platform: str) -> Any:
     cfg = load_config()
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model"), dict) else {}
     agent_cfg = cfg.get("agent") or {}
+    disabled = parse_config_string_list(agent_cfg.get("disabled_toolsets")) or None
+    if platform in {"desktop", "tui"}:
+        from hermes_cli.session_toolsets import resolve_interactive_toolsets
+        enabled = resolve_interactive_toolsets(platform, disabled)
+    else:
+        enabled = sorted(_get_platform_tools(cfg, platform))
     return AIAgent(
         model=model_cfg.get("default") or model_cfg.get("model") or "",
         api_key="inspect-only", base_url="https://openrouter.ai/api/v1", quiet_mode=True, save_trajectories=False,
-        platform=platform, enabled_toolsets=sorted(_get_platform_tools(cfg, platform)),
-        disabled_toolsets=parse_config_string_list(agent_cfg.get("disabled_toolsets")) or None,
+        platform=platform, enabled_toolsets=enabled, disabled_toolsets=disabled,
+        inspection_mode=True,
     )
 
 
@@ -151,9 +157,16 @@ def compute_prompt_breakdown(platform: str = "cli") -> dict[str, Any]:
     ``memory``, ``user_profile``, ``tools``, ``sections`` (the three prompt tiers), and the
     largest-first ``skills_breakdown`` / ``toolsets_breakdown`` ("what should I disable?").
     """
+    agent = _build_inspection_agent(platform)
+    try:
+        return _compute_agent_breakdown(agent, platform)
+    finally:
+        agent.close()
+
+
+def _compute_agent_breakdown(agent: Any, platform: str) -> dict[str, Any]:
     from agent.system_prompt import build_system_prompt, build_system_prompt_parts
 
-    agent = _build_inspection_agent(platform)
     parts = build_system_prompt_parts(agent)
     full = build_system_prompt(agent)
     stable, context, volatile = (parts.get(k, "") for k in ("stable", "context", "volatile"))
@@ -174,7 +187,7 @@ def compute_prompt_breakdown(platform: str = "cli") -> dict[str, Any]:
             if getattr(agent, "_user_profile_enabled", True):
                 user_block = store.format_for_system_prompt("user") or ""
         except Exception:
-            pass
+            logger.debug("Memory breakdown unavailable", exc_info=True)
 
     tools = getattr(agent, "tools", None) or []
     sections: list[tuple[str, int, int]] = [

@@ -130,14 +130,14 @@ def test_a_session_off_the_desktop_never_hears_of_the_tool_even_through_tool_sea
     """A CLI config naming ``catalog``, and a delegate child of a desktop chat, lose manage_catalog from
     the direct tools, the tool_search listing and the bridge's search, not just from the direct tools."""
     import model_tools
-    from agent.agent_init import _load_tools
+    from agent.agent_init_tools import load_tools
 
     monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
     enabled, disabled = _desktop_child_toolsets() if platform == "subagent" else (["catalog", "web"], None)
     assert "catalog" in enabled
     agent = SimpleNamespace(quiet_mode=True, platform=platform, enabled_toolsets=enabled, disabled_toolsets=disabled)
 
-    _load_tools(agent, enabled, disabled)
+    load_tools(agent, enabled, disabled)
     found = json.loads(model_tools.handle_function_call(
         "tool_search", {"queries": ["catalog plugin install"]},
         enabled_toolsets=agent.enabled_toolsets, disabled_toolsets=agent.disabled_toolsets))

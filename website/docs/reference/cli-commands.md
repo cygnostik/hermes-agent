@@ -1313,7 +1313,18 @@ It builds the same system prompt the agent would, then breaks it down:
 - **Tool schemas** — the JSON for all enabled tools (the other half of the
   fixed per-call payload).
 
-Runs entirely offline — no API call, works with no credentials configured.
+Runs offline without provider credentials: it does not initialize model clients,
+refresh model metadata, connect MCP servers, or start external memory/context
+providers. Built-in memory and locally available tool schemas are included;
+external-provider additions and undiscovered MCP schemas are not. Tool-search
+sizing uses a configured or cached context window, or the default fallback, so
+this is not a snapshot of a live session's selected model or connected services.
+Installed plugins still execute their own local discovery and requirement checks.
+
+For `--platform desktop` and `--platform tui`, tool selection follows the same
+CLI configuration, coding posture, launch pin (`HERMES_TUI_TOOLSETS`), and
+client-surface rules as a fresh interactive session. An explicitly empty CLI
+toolset selection stays empty.
 
 ```bash
 # Human-readable breakdown for the CLI platform (default)

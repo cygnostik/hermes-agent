@@ -63,7 +63,7 @@ def _captured_context_cwd(agent):
 @pytest.mark.parametrize("task_id, expected", [(None, False), ("t_worker", True)])
 def test_kanban_guidance_requires_worker_task_at_agent_init(monkeypatch, task_id, expected):
     """A profile can expose kanban tools without making the session a worker."""
-    from agent.agent_init import _load_tools
+    from agent.agent_init_tools import load_tools
     from agent.prompt_builder import KANBAN_GUIDANCE
     import model_tools
 
@@ -79,7 +79,7 @@ def test_kanban_guidance_requires_worker_task_at_agent_init(monkeypatch, task_id
     )
     agent = SimpleNamespace(quiet_mode=True)
 
-    _load_tools(agent, enabled_toolsets=["kanban"], disabled_toolsets=None)
+    load_tools(agent, enabled_toolsets=["kanban"], disabled_toolsets=None)
 
     assert (agent._kanban_worker_guidance == KANBAN_GUIDANCE) is expected
 

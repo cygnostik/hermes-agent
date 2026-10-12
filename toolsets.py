@@ -66,7 +66,7 @@ def _core_without(*excluded, kanban=True):
 # tts, image_gen, cron, kanban and computer-use.
 _CODING_TOOLS = _core_without("image_generate", "text_to_speech", "cronjob_manage", "computer_use", kanban=False)
 
-# Toolsets a CLIENT adds to its own sessions (tui_gateway/server.py::_gui_surface_toolsets), never
+# Toolsets a CLIENT adds to its own sessions (hermes_cli/session_toolsets.py::_gui_surface_toolsets), never
 # config: another surface lacking them made no configuration choice.
 CLIENT_SURFACE_TOOLSETS = frozenset({"project", "desktop_ui", "catalog"})
 

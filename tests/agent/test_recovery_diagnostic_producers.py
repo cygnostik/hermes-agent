@@ -65,7 +65,7 @@ def test_outer_loop_diagnostic_preserves_verdict_and_trace(policy, local, capsys
 
 
 def test_missing_requirements_keeps_tool_inventory(policy, monkeypatch, capsys):
-    from agent.agent_init import _load_tools
+    from agent.agent_init_tools import load_tools
     import model_tools
     agent = Agent()
     agent.quiet_mode = agent.save_trajectories = agent._use_prompt_caching = False
@@ -73,7 +73,7 @@ def test_missing_requirements_keeps_tool_inventory(policy, monkeypatch, capsys):
     monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
     monkeypatch.setattr(model_tools, "get_tool_definitions", lambda **kw: [{"function": {"name": "offline_tool"}}])
     monkeypatch.setattr(model_tools, "check_toolset_requirements", lambda: {"fixture_dependency": False})
-    _load_tools(agent, None, None)
+    load_tools(agent, None, None)
     output = capsys.readouterr().out + "\n".join(agent.printed)
     assert ("Some tools may not work due to missing requirements" in output) is not policy
     assert "Loaded 1 tools" in output

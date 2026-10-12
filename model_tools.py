@@ -213,20 +213,25 @@ def _clear_tool_defs_cache() -> None:
 
 
 def get_tool_definitions(enabled_toolsets: Optional[list[str]] = None, disabled_toolsets: Optional[list[str]] = None,
-                         quiet_mode: bool = False, skip_tool_search_assembly: bool = False) -> list[dict[str, Any]]:
+                         quiet_mode: bool = False, skip_tool_search_assembly: bool = False,
+                         allow_network: bool = True) -> list[dict[str, Any]]:
     """Tool definitions for model API calls, filtered by toolset.
 
     enabled_toolsets None = all; disabled_toolsets are subtracted after enabling.
     quiet_mode suppresses status prints and enables memoization.
     skip_tool_search_assembly returns raw schemas for every enabled tool — only
     the tool_search bridge should use it (it reads the real, uncollapsed catalog).
+    allow_network=False keeps context-window sizing on config/cache/fallback data;
+    it does not sandbox installed plugins or their requirement checks.
     """
     def compute():
         return _compute_tool_definitions(enabled_toolsets, disabled_toolsets, quiet_mode,
-                                         skip_tool_search_assembly=skip_tool_search_assembly)
+                                         skip_tool_search_assembly=skip_tool_search_assembly, allow_network=allow_network)
     if not quiet_mode:
         return compute()
     cache_key = _tool_defs_cache_key(enabled_toolsets, disabled_toolsets, skip_tool_search_assembly)
+    if cache_key is not None:
+        cache_key = (*cache_key, allow_network)
     # Cache the freshly-computed list, but hand callers a shallow copy so downstream mutations (e.g.
     # run_agent appending memory/LCM tool schemas to self.tools) don't poison the cache. Without this, a
     # long-lived Gateway process accumulates duplicate tool names across agent inits and providers that
@@ -498,7 +503,8 @@ _TOOL_SEARCH_LISTING_FORMS = {
 
 
 def _compute_tool_definitions(enabled_toolsets: Optional[list[str]] = None, disabled_toolsets: Optional[list[str]] = None,
-                              quiet_mode: bool = False, skip_tool_search_assembly: bool = False) -> list[dict[str, Any]]:
+                              quiet_mode: bool = False, skip_tool_search_assembly: bool = False,
+                              allow_network: bool = True) -> list[dict[str, Any]]:
     """Uncached implementation of :func:`get_tool_definitions`."""
     tools_to_include = _select_tool_names(enabled_toolsets, disabled_toolsets, quiet_mode)
     # Selection is per schema, not per process/profile. Kanban's local checks
@@ -528,7 +534,8 @@ def _compute_tool_definitions(enabled_toolsets: Optional[list[str]] = None, disa
         from tools.tool_search import assemble_tool_defs, load_config as _load_ts_config
         ts_cfg = _load_ts_config()
         if not skip_tool_search_assembly and ts_cfg.enabled != "off":
-            assembly = assemble_tool_defs(filtered_tools, context_length=_resolve_active_context_length(), config=ts_cfg)
+            context_length = _resolve_active_context_length() if allow_network else _resolve_active_context_length(allow_network=False)
+            assembly = assemble_tool_defs(filtered_tools, context_length=context_length, config=ts_cfg)
             if assembly.activated and not quiet_mode:
                 print(f"🔎 Tool Search (tier {assembly.tier}): {assembly.deferred_count} "
                       f"MCP/plugin tools deferred (~{assembly.deferred_tokens} tokens) behind "
@@ -553,7 +560,7 @@ def _active_model_config() -> tuple[str, dict[str, Any]]:
     return str(raw_model_id).strip(), model_cfg
 
 
-def _resolve_active_context_length() -> int:
+def _resolve_active_context_length(*, allow_network: bool = True) -> int:
     """Active model's context length for the tool-search gate (0 if unresolvable).
 
     Order: explicit `model.context_length`; provider-aware resolution (Codex OAuth
@@ -574,6 +581,10 @@ def _resolve_active_context_length() -> int:
         provider = str(model_cfg.get("provider") or "").strip()
         base_url = str(model_cfg.get("base_url") or "").strip()
         api_key = ""
+        if not allow_network:
+            # Offline inspection must not refresh credentials or probe model endpoints.
+            from agent.model_metadata import DEFAULT_FALLBACK_CONTEXT
+            return config_ctx or get_cached_context_length(model_id, base_url) or DEFAULT_FALLBACK_CONTEXT
         if provider:
             # Credential resolution failing (offline, no keys) degrades to a
             # provider+base_url-only lookup so static fallbacks still apply.

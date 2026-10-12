@@ -2507,12 +2507,11 @@ def test_load_enabled_toolsets_honors_disabled_project_on_configured_fallback(
 def test_with_session_toolsets_keeps_desktop_ui_when_project_disabled(monkeypatch):
     """#54433: a disabled name is subtracted from the client-surface fold-in, but
     ``desktop_ui`` — the client's own control surface — survives the subtraction."""
-    monkeypatch.setattr(server, "_load_disabled_toolsets", lambda: ["project"])
+    from hermes_cli.session_toolsets import _with_session_toolsets
 
-    assert server._with_session_toolsets(["memory"], "desktop") == ["memory", "catalog", "desktop_ui"]
+    assert _with_session_toolsets(["memory"], "desktop", ["project"]) == ["memory", "catalog", "desktop_ui"]
     # Nothing disabled: the fold-in keeps every client-surface toolset.
-    monkeypatch.setattr(server, "_load_disabled_toolsets", lambda: None)
-    assert server._with_session_toolsets(["memory"], "desktop") == ["memory", "catalog", "desktop_ui", "project"]
+    assert _with_session_toolsets(["memory"], "desktop") == ["memory", "catalog", "desktop_ui", "project"]
 
 
 def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):

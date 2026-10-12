@@ -737,6 +737,8 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     Never re-rendered mid-session."""
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
+    if getattr(agent, "inspection_mode", False):
+        _cc_len = getattr(agent, "_inspection_context_length", None)
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
     # ── Stable tier ────────────────────────────────────────────────
     stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)

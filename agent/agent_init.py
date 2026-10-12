@@ -511,7 +511,7 @@ def _finalize_routing(agent, api_mode, credential_pool):
 
     # Pre-warm the OpenRouter metadata cache (1h TTL) off-thread so the first pricing estimate
     # doesn't block. Process-level Event guard: an unguarded spawn leaks a thread per message.
-    if (agent.provider == "openrouter" or agent._is_openrouter_url()) and \
+    if not getattr(agent, "inspection_mode", False) and (agent.provider == "openrouter" or agent._is_openrouter_url()) and \
             not _ra()._openrouter_prewarm_done.is_set():
         _ra()._openrouter_prewarm_done.set()
         threading.Thread(
@@ -583,7 +583,7 @@ _TURN_STATE: dict[str, Any] = {
     "_api_call_count": 0,
     # Opt-out for the between-turns MCP refresh; set on forks that need byte-identical tools[].
     "_skip_mcp_refresh": False,
-    # Registry generation of the tool snapshot (set in _load_tools): a late refresh rejects
+    # Registry generation of the tool snapshot (set in agent_init_tools.load_tools): a late refresh rejects
     # a stale rebuild instead of clobbering a newer one.
     "_tool_snapshot_generation": 0,
     "_rate_limit_state": None,  # from x-ratelimit-* headers; read by /usage
@@ -1090,75 +1090,6 @@ def _client_kwargs_from_routed(client, timeout) -> dict[str, Any]:
     return kwargs
 
 
-def _load_tools(agent, enabled_toolsets, disabled_toolsets):
-    # A feature that left core for a catalog plugin (Home Assistant) is installed for a home that
-    # used it, once per process, before discovery so its tools are in this agent's snapshot.
-    from hermes_cli.left_core_migration import recover_at_startup
-    recover_at_startup(say=getattr(agent, "_emit_startup_warning", None))
-    # A multiplexed gateway may have switched HERMES_HOME since model_tools was imported;
-    # make sure this profile's plugins are discovered before the tool snapshot.
-    try:
-        from hermes_cli.plugins import discover_plugins
-        discover_plugins()
-    except Exception:
-        logger.warning("Plugin discovery failed during agent setup", exc_info=True)
-
-    # Capture the registry generation FIRST so a concurrent refresh can detect staleness.
-    try:
-        from tools.registry import registry as _snapshot_registry
-        agent._tool_snapshot_generation = _snapshot_registry._generation
-    except Exception:
-        agent._tool_snapshot_generation = 0
-    import model_tools
-    from toolsets import agent_tool_drops, session_disabled_toolsets
-    disabled_toolsets = session_disabled_toolsets(disabled_toolsets, getattr(agent, "platform", None))
-    agent.disabled_toolsets = disabled_toolsets  # so the tool_search bridge and delegate children drop them too
-    agent.tools = model_tools.get_tool_definitions(
-        enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets, quiet_mode=agent.quiet_mode)
-    # A finite -q run has no later session to learn for: no skill authoring tool (agent/oneshot_footprint.py).
-    from agent.oneshot_footprint import prune_oneshot_tools
-    agent.tools = prune_oneshot_tools(agent.tools or [])
-    if drops := agent_tool_drops(agent):
-        agent.tools = [t for t in agent.tools if t["function"]["name"] not in drops]
-
-    agent.valid_tool_names = {tool["function"]["name"] for tool in agent.tools} if agent.tools else set()
-    # Kanban guidance is session-static for the dispatcher-owned worker only. Profiles may
-    # expose kanban_show interactively, and children/cron runs inherit the env var, without
-    # owning a task.
-    from agent.delegation_context import owned_kanban_task
-    from agent.prompt_builder import KANBAN_GUIDANCE
-    agent._kanban_worker_guidance = (
-        KANBAN_GUIDANCE if owned_kanban_task() and "kanban_show" in agent.valid_tool_names else ""
-    )
-    if agent.quiet_mode:
-        return
-    if agent.tools:
-        print(f"🛠️  Loaded {len(agent.tools)} tools: {', '.join(sorted(agent.valid_tool_names))}")
-        if enabled_toolsets:
-            print(f"   ✅ Enabled toolsets: {', '.join(enabled_toolsets)}")
-        if disabled_toolsets:
-            print(f"   ❌ Disabled toolsets: {', '.join(disabled_toolsets)}")
-        import model_tools
-        requirements = model_tools.check_toolset_requirements()
-        missing_reqs = [name for name, available in requirements.items() if not available]
-        if missing_reqs:
-            agent._safe_print(f"⚠️  Some tools may not work due to missing requirements: {missing_reqs}", diagnostic=True)
-    else:
-        print("🛠️  No tools loaded (all tools filtered out or unavailable)")
-    if agent.save_trajectories:
-        print("📝 Trajectory saving enabled")
-    if agent.ephemeral_system_prompt:
-        prompt_preview = agent.ephemeral_system_prompt[:60] + "..." if len(agent.ephemeral_system_prompt) > 60 else agent.ephemeral_system_prompt
-        print(f"🔒 Ephemeral system prompt: '{prompt_preview}' (not saved to trajectories)")
-    if agent._use_prompt_caching:
-        if agent._use_native_cache_layout and agent.provider == "anthropic":
-            source = "native Anthropic"
-        elif agent._use_native_cache_layout:
-            source = "Anthropic-compatible endpoint"
-        else:
-            source = "Claude via OpenRouter"
-        print(f"💾 Prompt caching: ENABLED ({source}, {agent._cache_ttl} TTL)")
-
 
 def _publish_session_id(session_id: str) -> None:
     """Expose the session ID to tools via ContextVar (+ legacy os.environ fallback).
@@ -1339,7 +1270,7 @@ def _init_memory(agent, _agent_cfg, skip_memory, platform, memory_manager=None):
         # already-initialized manager: providers keep their prefetch/retain state across turns instead
         # of being re-initialized (#120116). No initialize_all — the providers are already bound.
         agent._memory_manager = memory_manager
-    elif not skip_memory:
+    elif not skip_memory and not getattr(agent, "inspection_mode", False):
         try:
             _mem_provider_name = mem_config.get("provider", "") if mem_config else ""
             if not is_core_memory_provider(_mem_provider_name):
@@ -2393,10 +2324,12 @@ def init_agent(
     checkpoint_max_snapshots: int = 20, checkpoint_max_total_size_mb: int = 500,
     checkpoint_max_file_size_mb: int = 10, pass_session_id: bool = False,
     requested_provider: str | None = None, capabilities: Optional[dict[str, bool]] = None, cwd: Optional[str] = None,
-    side_agent: bool = False, memory_manager=None,
+    side_agent: bool = False, memory_manager=None, inspection_mode: bool = False,
     tool_result_metadata_callback: Optional[Callable[..., dict]] = None,
 ):
     _install_safe_stdio()
+    # Prompt inspection keeps local prompt inputs, not live provider/runtime startup.
+    agent.inspection_mode = inspection_mode
 
     _params = locals()
     for _name in _PASSTHROUGH_PARAMS:
@@ -2460,9 +2393,14 @@ def init_agent(
     _init_turn_state(agent, run_budget_seconds)
     _setup_logging(agent)
     _set_defaults(agent, _STREAM_STATE)
-    _build_client(agent, api_key, base_url, fallback_model)
+    if inspection_mode:
+        agent.client, agent._anthropic_client = None, None
+        agent._client_kwargs = {}
+    else:
+        _build_client(agent, api_key, base_url, fallback_model)
     _init_fallback_chain(agent, fallback_model)
-    _load_tools(agent, enabled_toolsets, disabled_toolsets)
+    from agent.agent_init_tools import load_tools
+    load_tools(agent, enabled_toolsets, disabled_toolsets)
     _init_session_state(
         agent, session_id, session_db, parent_session_id, reasoning_config, max_tokens,
         checkpoints_enabled, checkpoint_max_snapshots, checkpoint_max_total_size_mb, checkpoint_max_file_size_mb,
@@ -2478,6 +2416,12 @@ def init_agent(
     _apply_display_config(agent, _agent_cfg, platform)
     _init_memory(agent, _agent_cfg, skip_memory, platform, memory_manager=memory_manager)
     _apply_agent_section(agent, _agent_cfg)
+    if inspection_mode:
+        # Keep prompt sizing independent of engines that may start external providers.
+        from model_tools import _resolve_active_context_length
+        agent._inspection_context_length = _resolve_active_context_length(allow_network=False)
+        agent.context_compressor = None
+        return
     cs = _parse_compression_config(agent, _agent_cfg)
     _config_context_length, _custom_providers, _effective_context_length, _model_cfg = _resolve_context_length(
         agent, _agent_cfg, base_url

@@ -274,10 +274,15 @@ class AIAgent(
         checkpoint_max_total_size_mb: int = 500, checkpoint_max_file_size_mb: int = 10,
         pass_session_id: bool = False, requested_provider: str | None = None,
         capabilities: dict[str, bool] | None = None, cwd: str | None = None,
-        side_agent: bool = False, memory_manager=None,
+        side_agent: bool = False, memory_manager=None, inspection_mode: bool = False,
         tool_result_metadata_callback: Optional[Callable[..., dict]] = None,
     ):
-        """Forwarder — see ``agent.agent_init.init_agent`` (same keyword parameters, minus ``tool_delay``)."""
+        """Forwarder to ``agent.agent_init.init_agent`` (minus ``tool_delay``).
+
+        ``inspection_mode`` builds local prompt inputs only: no provider client,
+        metadata prewarm, external memory provider or compression engine startup.
+        Such an agent is for prompt inspection, not conversation execution.
+        """
         init_kwargs = {k: v for k, v in locals().items() if k not in ("self", "tool_delay")}
         if tool_delay is not None:
             warnings.warn("tool_delay is deprecated and ignored; sequential tool calls "
